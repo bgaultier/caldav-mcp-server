@@ -1,0 +1,4 @@
+mcp
+caldav
+icalendar
+python-dotenv
