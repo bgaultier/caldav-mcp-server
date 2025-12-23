@@ -1,7 +1,6 @@
 import os
 import caldav
 from datetime import datetime
-import time
 from mcp.server.fastmcp import FastMCP
 from dotenv import load_dotenv
 
@@ -25,28 +24,41 @@ def get_client():
         password=password
     )
 
+def ensure_local_tz(dt_str: str) -> datetime:
+    """
+    Parses an ISO string. If it lacks timezone info, attaches 
+    the system's local timezone.
+    """
+    try:
+        dt = datetime.fromisoformat(dt_str)
+        # Get system local timezone
+        local_tz = datetime.now().astimezone().tzinfo
+        
+        # If the datetime object is "naive" (no timezone), set it to local
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=local_tz)
+        return dt
+    except ValueError:
+        raise ValueError(f"Date format must be ISO 8601 (YYYY-MM-DDTHH:MM:SS). Received: {dt_str}")
+
 @mcp.tool()
 def get_current_time() -> dict:
     """
-    Get the current local system time, timezone, and day of the week.
-    Use this tool immediately if the user asks for relative dates like 
-    'tomorrow', 'next week', or 'this afternoon' so you can calculate 
-    the correct ISO dates.
+    Get the current local system time.
+    Use this to calculate relative dates.
     """
+    # astimezone() ensures we get the system's local config
     now = datetime.now().astimezone()
     return {
         "iso_format": now.isoformat(),
         "day_of_week": now.strftime("%A"),
-        "timezone": str(now.tzinfo),
-        "readable": now.strftime("%Y-%m-%d %H:%M:%S")
+        "timezone_name": str(now.tzinfo),
+        "hour_24_format": now.strftime("%H:%M")
     }
 
 @mcp.tool()
 def list_calendars() -> list[dict]:
-    """
-    Lists all available calendars on the WebDAV/CalDAV server.
-    Returns the calendar name and its URL.
-    """
+    """Lists all available calendars."""
     client = get_client()
     principal = client.principal()
     calendars = principal.calendars()
@@ -70,18 +82,16 @@ def create_event(
     location: str = ""
 ) -> str:
     """
-    Creates a new calendar event.
-    
+    Creates a new calendar event using the LOCAL system timezone.
+
     Args:
-        calendar_name: The display name of the calendar (e.g. "Personal").
-        summary: The title of the event.
-        start_time: ISO 8601 format (YYYY-MM-DDTHH:MM:SS).
-        end_time: ISO 8601 format (YYYY-MM-DDTHH:MM:SS).
-        description: Optional details.
-        location: Optional location.
-    
-    Returns:
-        The URL of the created event.
+        calendar_name: The display name of the calendar.
+        summary: Title of the event.
+        start_time: ISO 8601 format in 24h time (e.g., '2023-12-01T14:30:00'). 
+                    Do NOT use AM/PM. 
+        end_time: ISO 8601 format in 24h time (e.g., '2023-12-01T15:30:00').
+        description: Details about the event.
+        location: Physical location or URL.
     """
     client = get_client()
     principal = client.principal()
@@ -93,16 +103,20 @@ def create_event(
         available = ", ".join([c.name or "Unknown" for c in calendars])
         raise ValueError(f"Calendar '{calendar_name}' not found. Available: {available}")
 
-    # Create the event
+    # Process times to ensure they are 24h localized datetime objects
+    dt_start = ensure_local_tz(start_time)
+    dt_end = ensure_local_tz(end_time)
+
+    # Save event
     event = target_cal.save_event(
-        dtstart=datetime.fromisoformat(start_time),
-        dtend=datetime.fromisoformat(end_time),
+        dtstart=dt_start,
+        dtend=dt_end,
         summary=summary,
         description=description,
         location=location
     )
     
-    return str(event.url)
+    return f"Event created successfully: {summary} at {dt_start.strftime('%Y-%m-%d %H:%M')} (Local Time)"
 
 @mcp.tool()
 def get_events(
@@ -111,10 +125,8 @@ def get_events(
     end_time: str
 ) -> list[dict]:
     """
-    Get events from a specific calendar within a time range.
-    
+    Get events within a time range.
     Args:
-        calendar_name: The name of the calendar.
         start_time: ISO 8601 string (start of search range).
         end_time: ISO 8601 string (end of search range).
     """
@@ -123,16 +135,17 @@ def get_events(
     calendars = principal.calendars()
     
     target_cal = next((c for c in calendars if c.name == calendar_name), None)
-    
     if not target_cal:
-        available = ", ".join([c.name or "Unknown" for c in calendars])
-        raise ValueError(f"Calendar '{calendar_name}' not found. Available: {available}")
+        raise ValueError(f"Calendar '{calendar_name}' not found.")
 
-    # Search for events
+    # Convert strings to localized datetimes for searching
+    dt_start = ensure_local_tz(start_time)
+    dt_end = ensure_local_tz(end_time)
+
     results = target_cal.date_search(
-        start=datetime.fromisoformat(start_time),
-        end=datetime.fromisoformat(end_time),
-        expand=True 
+        start=dt_start,
+        end=dt_end,
+        expand=True
     )
     
     events_data = []
@@ -141,12 +154,12 @@ def get_events(
         event.load()
         for component in event.icalendar_component.walk():
             if component.name == "VEVENT":
-                # Helper to safely serialize datetime objects
                 def get_str(key, default=''):
                     val = component.get(key)
                     if val is None: return default
-                    # If it's a proprietary object (like vText), cast to str
-                    if hasattr(val, 'dt'): return str(val.dt)
+                    # If it's a date object, format it closely to our input style
+                    if hasattr(val, 'dt'): 
+                        return val.dt.isoformat()
                     return str(val)
 
                 events_data.append({
