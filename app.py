@@ -1,13 +1,13 @@
 import os
 import caldav
 from datetime import datetime
+import time
 from mcp.server.fastmcp import FastMCP
 from dotenv import load_dotenv
 
-# Load environment variables if present
+# Load environment variables
 load_dotenv()
 
-# Initialize the MCP server
 mcp = FastMCP("caldav-manager")
 
 def get_client():
@@ -25,15 +25,21 @@ def get_client():
         password=password
     )
 
-def parse_iso_date(date_str: str) -> datetime:
-    """Parses an ISO 8601 string to a datetime object."""
-    try:
-        # handle 'Z' for UTC
-        if date_str.endswith('Z'):
-            date_str = date_str[:-1]
-        return datetime.fromisoformat(date_str)
-    except ValueError:
-        raise ValueError(f"Invalid date format: {date_str}. Please use ISO 8601 (YYYY-MM-DDTHH:MM:SS)")
+@mcp.tool()
+def get_current_time() -> dict:
+    """
+    Get the current local system time, timezone, and day of the week.
+    Use this tool immediately if the user asks for relative dates like 
+    'tomorrow', 'next week', or 'this afternoon' so you can calculate 
+    the correct ISO dates.
+    """
+    now = datetime.now().astimezone()
+    return {
+        "iso_format": now.isoformat(),
+        "day_of_week": now.strftime("%A"),
+        "timezone": str(now.tzinfo),
+        "readable": now.strftime("%Y-%m-%d %H:%M:%S")
+    }
 
 @mcp.tool()
 def list_calendars() -> list[dict]:
@@ -64,10 +70,10 @@ def create_event(
     location: str = ""
 ) -> str:
     """
-    Creates a new calendar event. 
+    Creates a new calendar event.
     
     Args:
-        calendar_name: The display name of the calendar to add to (e.g., "Personal").
+        calendar_name: The display name of the calendar (e.g. "Personal").
         summary: The title of the event.
         start_time: ISO 8601 format (YYYY-MM-DDTHH:MM:SS).
         end_time: ISO 8601 format (YYYY-MM-DDTHH:MM:SS).
@@ -75,77 +81,80 @@ def create_event(
         location: Optional location.
     
     Returns:
-        Confirmation string with the new event URL.
+        The URL of the created event.
     """
     client = get_client()
     principal = client.principal()
-    
-    # transform iso strings to datetime objects
-    dt_start = parse_iso_date(start_time)
-    dt_end = parse_iso_date(end_time)
-
-    # Find the correct calendar
     calendars = principal.calendars()
+    
     target_cal = next((c for c in calendars if c.name == calendar_name), None)
-
+    
     if not target_cal:
-        return f"Error: Calendar named '{calendar_name}' not found. Available: {[c.name for c in calendars]}"
+        available = ", ".join([c.name or "Unknown" for c in calendars])
+        raise ValueError(f"Calendar '{calendar_name}' not found. Available: {available}")
 
     # Create the event
     event = target_cal.save_event(
-        dtstart=dt_start,
-        dtend=dt_end,
+        dtstart=datetime.fromisoformat(start_time),
+        dtend=datetime.fromisoformat(end_time),
         summary=summary,
         description=description,
         location=location
     )
-
-    return f"Successfully created event '{summary}' in '{calendar_name}' (ID: {event.id})"
+    
+    return str(event.url)
 
 @mcp.tool()
 def get_events(
     calendar_name: str,
-    start_range: str,
-    end_range: str
+    start_time: str,
+    end_time: str
 ) -> list[dict]:
     """
-    Get events from a specific calendar within a date range.
+    Get events from a specific calendar within a time range.
     
     Args:
-        calendar_name: The name of the calendar to search.
-        start_range: ISO 8601 format start of search window.
-        end_range: ISO 8601 format end of search window.
+        calendar_name: The name of the calendar.
+        start_time: ISO 8601 string (start of search range).
+        end_time: ISO 8601 string (end of search range).
     """
     client = get_client()
     principal = client.principal()
-    
-    dt_start = parse_iso_date(start_range)
-    dt_end = parse_iso_date(end_range)
-
     calendars = principal.calendars()
+    
     target_cal = next((c for c in calendars if c.name == calendar_name), None)
-
+    
     if not target_cal:
-        raise ValueError(f"Calendar '{calendar_name}' not found.")
+        available = ", ".join([c.name or "Unknown" for c in calendars])
+        raise ValueError(f"Calendar '{calendar_name}' not found. Available: {available}")
 
-    # Fetch events
-    results = target_cal.date_search(start=dt_start, end=dt_end)
+    # Search for events
+    results = target_cal.date_search(
+        start=datetime.fromisoformat(start_time),
+        end=datetime.fromisoformat(end_time),
+        expand=True 
+    )
     
     events_data = []
     
     for event in results:
-        # Load the vObject data
         event.load()
-        # Parse the ical component (VEVENT)
         for component in event.icalendar_component.walk():
             if component.name == "VEVENT":
+                # Helper to safely serialize datetime objects
+                def get_str(key, default=''):
+                    val = component.get(key)
+                    if val is None: return default
+                    # If it's a proprietary object (like vText), cast to str
+                    if hasattr(val, 'dt'): return str(val.dt)
+                    return str(val)
+
                 events_data.append({
-                    "summary": str(component.get('summary', 'No Title')),
-                    "start": str(component.get('dtstart').dt),
-                    "end": str(component.get('dtend').dt),
-                    "description": str(component.get('description', '')),
-                    "location": str(component.get('location', '')),
-                    "uid": str(component.get('uid', ''))
+                    "summary": get_str('summary', 'No Title'),
+                    "start": get_str('dtstart'),
+                    "end": get_str('dtend'),
+                    "description": get_str('description'),
+                    "location": get_str('location'),
                 })
 
     return events_data
