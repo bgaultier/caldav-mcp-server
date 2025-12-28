@@ -10,7 +10,7 @@ from icalendar import Calendar, Event, vCalAddress, vText
 # Load environment variables
 load_dotenv()
 
-mcp = FastMCP("caldav-manager")
+mcp = FastMCP("caldav-mcp-server")
 
 def get_client():
     """Helper to establish connection to the CalDAV server."""
