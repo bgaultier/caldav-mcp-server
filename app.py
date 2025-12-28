@@ -45,12 +45,20 @@ def get_current_time() -> dict:
     Use this to calculate relative dates.
     """
     now = datetime.now().astimezone()
-    return {
-        "iso_format": now.isoformat(),
-        "day_of_week": now.strftime("%A"),
-        "timezone_name": str(now.tzinfo),
-        "hour_24_format": now.strftime("%H:%M")
-    }
+    # We use strftime to strictly define the string format
+    # %A = Full weekday name (Monday)
+    # %d = Day of month
+    # %B = Full month name
+    # %Y = Year
+    
+    # Result example: "Monday, January 05, 2026"
+    formatted_date = now.strftime("%A, %B %d, %Y") 
+    iso_time = now.isoformat()
+    
+    # We provide BOTH the human string and the ISO string
+    response_text = f"Current Date: {formatted_date}\nISO format: {iso_time}"
+    
+    return response_text
 
 @mcp.tool()
 def list_calendars() -> list[dict]:
