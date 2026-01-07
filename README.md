@@ -2,6 +2,8 @@
 
 Un serveur Model Context Protocol (MCP) permettant d'interagir avec des calendriers CalDAV. Ce serveur permet aux assistants IA de gérer les événements de calendrier, lister les calendriers et gérer les invitations aux réunions.
 
+![Capture d'écran VS Code du serveur MCP CalDAV](https://raw.githubusercontent.com/bgaultier/caldav-mcp-server/capture_continue.png)
+
 ## Fonctionnalités
 
 - **Lister les calendriers** : Récupérer tous les calendriers disponibles depuis votre compte CalDAV
